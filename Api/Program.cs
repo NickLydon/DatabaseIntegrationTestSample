@@ -1,5 +1,5 @@
 using Database;
-using Microsoft.EntityFrameworkCore;
+using DatabaseIntegrationTestSample;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -10,8 +10,7 @@ builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
-builder.Services.AddDbContext<SampleDbContext>((_, optionsBuilder) =>
-    optionsBuilder.UseSqlServer("name=ConnectionStrings:SampleDb"));
+builder.Services.AddSampleDbContext<SampleDbContext>();
 
 var app = builder.Build();
 

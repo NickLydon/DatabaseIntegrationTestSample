@@ -21,5 +21,10 @@ public class SampleDbContext(DbContextOptions<SampleDbContext> options) : DbCont
             .HasOne(x => x.Attachment);
         modelBuilder.Entity<BlogPostAttachment>()
             .HasOne(x => x.BlogPost);
+        
+        foreach (var relationship in modelBuilder.Model.GetEntityTypes().SelectMany(e => e.GetForeignKeys()))
+        {
+            relationship.DeleteBehavior = DeleteBehavior.Restrict;
+        }
     }
 }

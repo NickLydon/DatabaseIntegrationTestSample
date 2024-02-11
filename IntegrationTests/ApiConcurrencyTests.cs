@@ -9,7 +9,7 @@ using Xunit.Extensions.AssemblyFixture;
 
 namespace IntegrationTests;
 
-public class ApiConcurrencyTests : IClassFixture<WebApplicationFactory<Program>>, IAssemblyFixture<MsSqlFixture>, IAsyncLifetime
+public class ApiConcurrencyTests : IClassFixture<WebApplicationFactory<Program>>, IAssemblyFixture<MsSqlFixture>, IAsyncLifetime, ICommitInterceptor
 {
     private readonly WebApplicationFactory<Program> _factory;
 
@@ -29,6 +29,8 @@ public class ApiConcurrencyTests : IClassFixture<WebApplicationFactory<Program>>
                 collection.BuildServiceProvider().GetRequiredService<SampleDbContext>().Database.Migrate();
                 collection.Remove(collection.Single(x => x.ImplementationType == typeof(SampleDbContext)));
                 collection.AddSampleDbContext<TestDbContext>();
+                collection.AddScoped<TestDbContext>();
+                collection.AddSingleton<ICommitInterceptor>(this);
             });
         });
     }
@@ -59,24 +61,39 @@ public class ApiConcurrencyTests : IClassFixture<WebApplicationFactory<Program>>
         await _factory.DisposeAsync();
     }
 
-    private class TestDbContext(DbContextOptions<SampleDbContext> options) : SampleDbContext(options)
+    private class TestDbContext(DbContextOptions<SampleDbContext> options, ICommitInterceptor commitInterceptor) : SampleDbContext(options)
     {
+        public Task<int> TestSaveChangesAsync(CancellationToken cancellationToken = new()) => base.SaveChangesAsync(cancellationToken);
+
         public override async Task<int> SaveChangesAsync(CancellationToken cancellationToken = new())
         {
-            int changes = 0;
-            var deletedAttachments = ChangeTracker.Entries<Attachment>().Where(x => x.State == EntityState.Deleted);
-            foreach (var deletedAttachment in deletedAttachments)
-            {
-                await MessageAttachments.AddAsync(new MessageAttachment
-                {
-                    AttachmentId = deletedAttachment.Entity.Id,
-                    Message = new Message { Body = "test" }
-                }, cancellationToken);
-                changes += await base.SaveChangesAsync(cancellationToken);
-            }
-        
-            changes += await base.SaveChangesAsync(cancellationToken);
-            return changes;
+            var deletedAttachments = ChangeTracker.Entries<Attachment>()
+                .Where(x => x.State == EntityState.Deleted)
+                .Select(x => x.Entity);
+            await commitInterceptor.OnAttachmentsDeleted(deletedAttachments);
+            
+            return await base.SaveChangesAsync(cancellationToken);
         }
     }
+
+    async Task ICommitInterceptor.OnAttachmentsDeleted(IEnumerable<Attachment> deletedAttachments)
+    {
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<TestDbContext>();
+        foreach (var deletedAttachment in deletedAttachments)
+        {
+            await dbContext.MessageAttachments.AddAsync(new MessageAttachment
+            {
+                AttachmentId = deletedAttachment.Id,
+                Message = new Message { Body = "test" }
+            });
+        }
+
+        await dbContext.TestSaveChangesAsync();
+    }
+}
+
+internal interface ICommitInterceptor
+{
+    Task OnAttachmentsDeleted(IEnumerable<Attachment> deletedAttachments);
 }
